@@ -1,0 +1,430 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>NoHang Protocol</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@300;400;500&family=Unbounded:wght@700;900&display=swap" rel="stylesheet" />
+  <style>
+    *, *::before, *::after { box-sizing: border-box; }
+    html, body { margin: 0; padding: 0; background: #0a0a0a; }
+    .btn { cursor: pointer; border: none; border-radius: 4px; font-family: 'DM Mono', monospace; font-size: 0.85rem; letter-spacing: 0.08em; text-transform: uppercase; transition: all 0.15s; }
+    .btn:hover { opacity: 0.85; transform: translateY(-1px); }
+    .btn:active { transform: translateY(0); }
+    .fade-in { animation: fadeIn 0.4s ease; }
+    @keyframes fadeIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.2/babel.min.js"></script>
+
+  <script type="text/babel">
+    const { useState, useEffect, useRef, useCallback } = React;
+
+    const PHASES = {
+      warmup:  { label: "Warm-Up",      color: "#4ade80" },
+      working: { label: "Working Sets", color: "#fb923c" },
+      rest:    { label: "Rest",         color: "#60a5fa" },
+      done:    { label: "Done",         color: "#e879f9" },
+    };
+
+    const PROTOCOL = [
+      {
+        id: 1,
+        phase: "warmup",
+        name: "Easy Hangs — Half Crimp",
+        grip: "Half Crimp",
+        holdLabel: "35mm",
+        gripDesc: "Four fingers curled over the edge, middle joint bent ~90°. Thumb rests alongside index finger — don't wrap it over.",
+        sets: 3,
+        hangDuration: 7,
+        restBetweenSets: 60,
+        intensity: "40–50% effort",
+        note: "Light. Just get blood into fingers. No max recruitment yet.",
+      },
+      {
+        id: 2,
+        phase: "working",
+        name: "Max Recruitment — Half Crimp",
+        grip: "Half Crimp",
+        holdLabel: "20mm",
+        gripDesc: "Four fingers on the 20mm edge, middle joint bent ~90°. Pull DOWN hard into the hold — don't lift off. Shoulder blades slightly engaged.",
+        sets: 5,
+        hangDuration: 10,
+        restBetweenSets: 120,
+        intensity: "85–90% effort",
+        note: "Maximum intent throughout. Think 'rip the board off the wall.' If 20mm is too easy, drop to 18mm next session.",
+      },
+      {
+        id: 3,
+        phase: "working",
+        name: "Max Recruitment — Open Hand",
+        grip: "Open Hand",
+        holdLabel: "25mm",
+        gripDesc: "Four fingers on the 25mm edge, but keep them STRAIGHTER than crimp — less bend at the middle knuckle, more like a gentle curl. No thumb. This is harder to feel at first, that's normal.",
+        sets: 5,
+        hangDuration: 10,
+        restBetweenSets: 120,
+        intensity: "85–90% effort",
+        note: "Open hand transfers better to outdoor holds. Use a bigger edge than crimp since it feels weaker — that's expected.",
+      },
+      {
+        id: 4,
+        phase: "working",
+        name: "Three Finger Drag",
+        grip: "3-Finger Drag",
+        holdLabel: "25mm",
+        gripDesc: "Index, middle, and ring fingers only — pinky stays off the edge entirely. Fingers straight like open hand, no curl. It'll feel unstable at first; that instability is exactly what you're training.",
+        sets: 4,
+        hangDuration: 10,
+        restBetweenSets: 90,
+        intensity: "80–85% effort",
+        note: "Most underused grip in bouldering. Common on outdoor slopers and compression moves. Hard to recruit maximally until it's practiced — focus on consistent intent over raw force.",
+      },
+    ];
+
+    function formatTime(s) {
+      const m = Math.floor(s / 60);
+      const sec = s % 60;
+      return `${m}:${sec.toString().padStart(2, "0")}`;
+    }
+
+    function Arc({ value, max, size = 160, stroke = 10, color }) {
+      const r = (size - stroke) / 2;
+      const circ = 2 * Math.PI * r;
+      const progress = 1 - (max > 0 ? value / max : 0);
+      return (
+        <svg width={size} height={size} style={{ transform: "rotate(-90deg)" }}>
+          <circle cx={size/2} cy={size/2} r={r} fill="none" stroke="#1e1e1e" strokeWidth={stroke} />
+          <circle
+            cx={size/2} cy={size/2} r={r}
+            fill="none" stroke={color} strokeWidth={stroke}
+            strokeDasharray={circ}
+            strokeDashoffset={circ * progress}
+            strokeLinecap="round"
+            style={{ transition: "stroke-dashoffset 0.5s linear" }}
+          />
+        </svg>
+      );
+    }
+
+    function HangboardApp() {
+      const [screen, setScreen]           = useState("intro");
+      const [exIdx, setExIdx]             = useState(0);
+      const [setNum, setSetNum]           = useState(1);
+      const [phase, setPhase]             = useState("hang");
+      const [timeLeft, setTimeLeft]       = useState(null);
+      const [running, setRunning]         = useState(false);
+      const [totalElapsed, setTotalElapsed] = useState(0);
+      const [displayExIdx, setDisplayExIdx] = useState(0);
+      const [displaySetNum, setDisplaySetNum] = useState(1);
+
+      const intervalRef = useRef(null);
+      const stateRef    = useRef({ exIdx: 0, setNum: 1, phase: "hang", timeLeft: 0, running: false });
+      const advanceRef  = useRef(null);
+
+      const ex        = PROTOCOL[exIdx];
+      const displayEx = PROTOCOL[displayExIdx];
+
+      // Audio ding using Web Audio API
+      const audioCtxRef = useRef(null);
+      const ding = useCallback((type = 'rest') => {
+        if (!audioCtxRef.current) audioCtxRef.current = new (window.AudioContext || window.webkitAudioContext)();
+        const ctx = audioCtxRef.current;
+        // Two tones for end-of-hang, one lower tone for end-of-rest
+        const notes = type === 'hang' ? [880, 1100] : [550];
+        notes.forEach((freq, i) => {
+          const osc  = ctx.createOscillator();
+          const gain = ctx.createGain();
+          osc.connect(gain); gain.connect(ctx.destination);
+          osc.type = 'sine';
+          osc.frequency.value = freq;
+          const t = ctx.currentTime + i * 0.18;
+          gain.gain.setValueAtTime(0, t);
+          gain.gain.linearRampToValueAtTime(0.35, t + 0.01);
+          gain.gain.exponentialRampToValueAtTime(0.0001, t + 0.4);
+          osc.start(t); osc.stop(t + 0.4);
+        });
+      }, []);
+
+      const startInterval = useCallback(() => {
+        clearInterval(intervalRef.current);
+        intervalRef.current = setInterval(() => {
+          const next = stateRef.current.timeLeft - 1;
+          stateRef.current.timeLeft = next;
+          setTimeLeft(next);
+          setTotalElapsed(e => e + 1);
+          if (next <= 0) {
+            clearInterval(intervalRef.current);
+            intervalRef.current = null;
+            advanceRef.current();
+          }
+        }, 1000);
+      }, []);
+
+      const advance = useCallback(() => {
+        const { exIdx, setNum, phase } = stateRef.current;
+        const ex = PROTOCOL[exIdx];
+
+        if (phase === "hang") {
+          ding('hang'); // double high ding — hang finished
+          if (setNum < ex.sets) {
+            const nextSetNum = setNum + 1;
+            stateRef.current = { ...stateRef.current, phase: "rest", timeLeft: ex.restBetweenSets, running: true, setNum: nextSetNum };
+            setPhase("rest");
+            setTimeLeft(ex.restBetweenSets);
+            setSetNum(nextSetNum);
+            setRunning(true);
+          } else if (exIdx + 1 < PROTOCOL.length) {
+            stateRef.current = { ...stateRef.current, phase: "between", timeLeft: 90, running: true, exIdx: exIdx + 1, setNum: 1 };
+            setPhase("between");
+            setTimeLeft(90);
+            setExIdx(exIdx + 1);
+            setSetNum(1);
+            setRunning(true);
+          } else {
+            stateRef.current.running = false;
+            setRunning(false);
+            setScreen("done");
+            return;
+          }
+        } else {
+          ding('rest'); // single low ding — rest over, hang starting
+          const nextEx = PROTOCOL[stateRef.current.exIdx];
+          stateRef.current = { ...stateRef.current, phase: "hang", timeLeft: nextEx.hangDuration, running: true };
+          setPhase("hang");
+          setTimeLeft(nextEx.hangDuration);
+          setRunning(true);
+          setDisplayExIdx(stateRef.current.exIdx);
+          setDisplaySetNum(stateRef.current.setNum);
+        }
+        startInterval();
+      }, [startInterval, ding]);
+
+      advanceRef.current = advance;
+      useEffect(() => { advanceRef.current = advance; }, [advance]);
+
+      useEffect(() => {
+        if (running && !intervalRef.current) {
+          startInterval();
+        } else if (!running) {
+          clearInterval(intervalRef.current);
+          intervalRef.current = null;
+        }
+        return () => { clearInterval(intervalRef.current); intervalRef.current = null; };
+      }, [running, startInterval]);
+
+      const startSession = () => {
+        const first = PROTOCOL[0];
+        clearInterval(intervalRef.current);
+        intervalRef.current = null;
+        stateRef.current = { exIdx: 0, setNum: 1, phase: "hang", timeLeft: first.hangDuration, running: false };
+        setScreen("session");
+        setExIdx(0); setSetNum(1); setPhase("hang");
+        setTimeLeft(first.hangDuration); setTotalElapsed(0);
+        setDisplayExIdx(0); setDisplaySetNum(1);
+        setRunning(true);
+      };
+
+      const toggle = () => {
+        const next = !stateRef.current.running;
+        stateRef.current.running = next;
+        setRunning(next);
+      };
+
+      const skip = () => {
+        clearInterval(intervalRef.current);
+        intervalRef.current = null;
+        advance();
+      };
+
+      // Keep screen awake while timer is running
+      const wakeLockRef = useRef(null);
+      useEffect(() => {
+        const acquire = async () => {
+          if ('wakeLock' in navigator) {
+            try { wakeLockRef.current = await navigator.wakeLock.request('screen'); } catch(e) {}
+          }
+        };
+        const release = () => {
+          if (wakeLockRef.current) { wakeLockRef.current.release(); wakeLockRef.current = null; }
+        };
+        if (running && screen === 'session') { acquire(); } else { release(); }
+        return release;
+      }, [running, screen]);
+
+      const isRest    = phase === "rest" || phase === "between";
+      const phaseData = PHASES[isRest ? "rest" : (ex?.phase || "working")];
+      const timerMax  = phase === "between" ? 90 : isRest ? (ex?.restBetweenSets || 120) : (ex?.hangDuration || 10);
+
+      // Next hang details to show during rest
+      const nextHangEx     = isRest ? PROTOCOL[exIdx] : null;
+      const nextHangSetNum = isRest ? setNum : null;
+
+      return (
+        <div style={{ minHeight: "100vh", background: "#0a0a0a", color: "#f0f0f0", fontFamily: "'DM Mono', monospace", display: "flex", flexDirection: "column", alignItems: "center" }}>
+
+          {/* Header */}
+          <div style={{ width: "100%", maxWidth: 480, padding: "16px 20px 0" }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+              <span style={{ fontFamily: "'Unbounded', sans-serif", fontSize: "0.75rem", color: "#666", letterSpacing: "0.15em" }}>NOHANG</span>
+              {screen === "session" && (
+                <span style={{ fontSize: "0.7rem", color: "#555" }}>ELAPSED {formatTime(totalElapsed)}</span>
+              )}
+            </div>
+          </div>
+
+          {/* ── INTRO ── */}
+          {screen === "intro" && (
+            <div className="fade-in" style={{ maxWidth: 480, width: "100%", padding: "32px 20px" }}>
+              <div style={{ fontFamily: "'Unbounded', sans-serif", fontSize: "2rem", lineHeight: 1.1, marginBottom: 8 }}>
+                No-Hang<br /><span style={{ color: "#fb923c" }}>Protocol</span>
+              </div>
+              <div style={{ color: "#888", fontSize: "0.78rem", marginBottom: 32, lineHeight: 1.7 }}>
+                Based on Emil Abrahamsson's isometric pulling method — max finger recruitment without full bodyweight load. Ideal for bouldering strength gains with lower injury risk.
+              </div>
+
+              <div style={{ marginBottom: 28 }}>
+                {PROTOCOL.map((ex, i) => (
+                  <div key={ex.id} style={{ display: "flex", gap: 12, marginBottom: 16, alignItems: "flex-start" }}>
+                    <div style={{ width: 28, height: 28, borderRadius: 4, background: PHASES[ex.phase].color + "22", border: `1px solid ${PHASES[ex.phase].color}44`, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0, color: PHASES[ex.phase].color, fontSize: "0.7rem", fontWeight: 500 }}>{i + 1}</div>
+                    <div>
+                      <div style={{ fontSize: "0.82rem", fontWeight: 500, color: "#e0e0e0" }}>{ex.name}</div>
+                      <div style={{ fontSize: "0.7rem", color: "#666", marginTop: 2 }}>{ex.sets} sets × {ex.hangDuration}s — {ex.holdLabel} edge — rest {ex.restBetweenSets}s</div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+
+              <div style={{ background: "#111", border: "1px solid #222", borderRadius: 8, padding: "14px 16px", marginBottom: 28, fontSize: "0.72rem", color: "#888", lineHeight: 1.7 }}>
+                <span style={{ color: "#fb923c" }}>HOW TO: </span>
+                Hang from the edge and pull DOWN into it with maximum intent — without pulling yourself off. Think "trying to rip the board off the wall." Engage your shoulder and core throughout.
+              </div>
+
+              <button className="btn" onClick={startSession} style={{ width: "100%", padding: "16px", background: "#fb923c", color: "#0a0a0a", fontSize: "0.9rem", fontWeight: 600, borderRadius: 6 }}>
+                START SESSION →
+              </button>
+            </div>
+          )}
+
+          {/* ── SESSION ── */}
+          {screen === "session" && ex && (
+            <div className="fade-in" style={{ maxWidth: 480, width: "100%", padding: "24px 20px" }}>
+
+              {/* Phase tag */}
+              <div style={{ display: "inline-block", background: phaseData.color + "22", border: `1px solid ${phaseData.color}55`, color: phaseData.color, fontSize: "0.65rem", letterSpacing: "0.15em", padding: "4px 10px", borderRadius: 3, marginBottom: 20 }}>
+                {isRest ? "REST" : phaseData.label.toUpperCase()}
+              </div>
+
+              {/* Exercise name */}
+              <div style={{ fontFamily: "'Unbounded', sans-serif", fontSize: "1.2rem", lineHeight: 1.2, marginBottom: 6, color: isRest ? "#888" : "#f0f0f0" }}>
+                {phase === "between" ? "Next Exercise Soon" : isRest ? "Recover" : ex.name}
+              </div>
+
+              {!isRest && (
+                <>
+                  <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 14, flexWrap: "wrap" }}>
+                    <div style={{ background: phaseData.color, color: "#0a0a0a", fontSize: "0.75rem", fontWeight: 700, padding: "3px 10px", borderRadius: 3, letterSpacing: "0.05em" }}>
+                      {ex.holdLabel} EDGE
+                    </div>
+                    <div style={{ fontSize: "0.7rem", color: "#555" }}>{ex.grip} · {ex.intensity}</div>
+                  </div>
+                  <div style={{ background: "#111", border: "1px solid #1e1e1e", borderRadius: 6, padding: "10px 14px", marginBottom: 4, fontSize: "0.72rem", color: "#777", lineHeight: 1.7 }}>
+                    <span style={{ color: phaseData.color, fontSize: "0.65rem", letterSpacing: "0.1em" }}>GRIP · </span>{ex.gripDesc}
+                  </div>
+                </>
+              )}
+
+              {/* Timer ring */}
+              <div style={{ display: "flex", flexDirection: "column", alignItems: "center", margin: "24px 0" }}>
+                <div style={{ position: "relative", width: 160, height: 160, display: "flex", alignItems: "center", justifyContent: "center" }}>
+                  <Arc value={timeLeft} max={timerMax} size={160} stroke={10} color={isRest ? "#60a5fa" : phaseData.color} />
+                  <div style={{ position: "absolute", textAlign: "center" }}>
+                    <div style={{ fontFamily: "'Unbounded', sans-serif", fontSize: "2.8rem", color: isRest ? "#60a5fa" : phaseData.color, lineHeight: 1 }}>{timeLeft}</div>
+                    <div style={{ fontSize: "0.65rem", color: "#555", letterSpacing: "0.1em", marginTop: 4 }}>SECONDS</div>
+                  </div>
+                </div>
+
+                {/* Set dots */}
+                <div style={{ marginTop: 16, display: "flex", gap: 6 }}>
+                  {Array.from({ length: displayEx.sets }).map((_, i) => {
+                    const completed = isRest ? i < displaySetNum : i < displaySetNum - 1;
+                    const active    = !isRest && i === displaySetNum - 1;
+                    return (
+                      <div key={i} style={{ width: 20, height: 4, borderRadius: 2, background: completed ? phaseData.color : active ? phaseData.color + "88" : "#222" }} />
+                    );
+                  })}
+                </div>
+                <div style={{ fontSize: "0.68rem", color: "#555", marginTop: 8, letterSpacing: "0.1em" }}>
+                  SET {displaySetNum} / {displayEx.sets}
+                </div>
+              </div>
+
+              {/* Cue (hang only) */}
+              {!isRest && (
+                <div style={{ background: "#111", border: `1px solid ${phaseData.color}22`, borderRadius: 6, padding: "12px 14px", marginBottom: 24, fontSize: "0.72rem", color: "#aaa", lineHeight: 1.6 }}>
+                  {ex.note}
+                </div>
+              )}
+
+              {/* Next hang preview (rest only) */}
+              {isRest && nextHangEx && (
+                <div style={{ background: "#111", border: "1px solid #1e2a1e", borderRadius: 8, padding: "14px 16px", marginBottom: 24 }}>
+                  <div style={{ fontSize: "0.6rem", color: "#444", letterSpacing: "0.15em", marginBottom: 10 }}>
+                    {phase === "between" ? "NEXT EXERCISE" : "NEXT HANG"}
+                  </div>
+                  <div style={{ fontSize: "0.88rem", fontWeight: 500, color: "#e0e0e0", marginBottom: 8 }}>{nextHangEx.name}</div>
+                  <div style={{ display: "flex", gap: 8, marginBottom: 10, flexWrap: "wrap" }}>
+                    <div style={{ background: PHASES[nextHangEx.phase].color, color: "#0a0a0a", fontSize: "0.7rem", fontWeight: 700, padding: "2px 8px", borderRadius: 3 }}>
+                      {nextHangEx.holdLabel} EDGE
+                    </div>
+                    <div style={{ fontSize: "0.7rem", color: "#555" }}>
+                      {phase === "between" ? `Set 1 / ${nextHangEx.sets}` : `Set ${nextHangSetNum} / ${nextHangEx.sets}`} · {nextHangEx.intensity}
+                    </div>
+                  </div>
+                  <div style={{ fontSize: "0.7rem", color: "#555", lineHeight: 1.6 }}>
+                    <span style={{ color: PHASES[nextHangEx.phase].color, fontSize: "0.62rem", letterSpacing: "0.08em" }}>GRIP · </span>{nextHangEx.gripDesc}
+                  </div>
+                </div>
+              )}
+
+              {/* Controls */}
+              <div style={{ display: "flex", gap: 10 }}>
+                <button className="btn" onClick={toggle} style={{ flex: 2, padding: "14px", background: running ? "#1e1e1e" : phaseData.color, color: running ? phaseData.color : "#0a0a0a", border: `1px solid ${phaseData.color}55` }}>
+                  {running ? "⏸ PAUSE" : "▶ RESUME"}
+                </button>
+                <button className="btn" onClick={skip} style={{ flex: 1, padding: "14px", background: "#111", color: "#555", border: "1px solid #222" }}>
+                  SKIP →
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* ── DONE ── */}
+          {screen === "done" && (
+            <div className="fade-in" style={{ maxWidth: 480, width: "100%", padding: "60px 20px", textAlign: "center" }}>
+              <div style={{ fontSize: "3rem", marginBottom: 16 }}>🧗</div>
+              <div style={{ fontFamily: "'Unbounded', sans-serif", fontSize: "1.8rem", color: "#e879f9", marginBottom: 12 }}>Session Done</div>
+              <div style={{ color: "#666", fontSize: "0.78rem", marginBottom: 8 }}>Total time: {formatTime(totalElapsed)}</div>
+              <div style={{ color: "#555", fontSize: "0.72rem", lineHeight: 1.8, margin: "16px auto 40px", maxWidth: 300 }}>
+                Give your fingers 48–72h before another finger-intensive session. Log it and get some protein in.
+              </div>
+              <button className="btn" onClick={() => { setScreen("intro"); setExIdx(0); setSetNum(1); setPhase("hang"); setTimeLeft(null); setRunning(false); }} style={{ padding: "14px 32px", background: "#e879f9", color: "#0a0a0a", borderRadius: 6 }}>
+                DO IT AGAIN
+              </button>
+            </div>
+          )}
+        </div>
+      );
+    }
+
+    const root = ReactDOM.createRoot(document.getElementById("root"));
+    root.render(<HangboardApp />);
+  </script>
+</body>
+</html>
