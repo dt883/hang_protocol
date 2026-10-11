@@ -28,76 +28,108 @@
 
     const PHASES = {
       warmup:  { label: "Warm-Up",      color: "#4ade80" },
+      tissue:  { label: "Tissue Prep",  color: "#facc15" },
       working: { label: "Working Sets", color: "#fb923c" },
       rest:    { label: "Rest",         color: "#60a5fa" },
       done:    { label: "Done",         color: "#e879f9" },
     };
 
+    // Climbing-day protocol: done after a general warm-up, right before you climb.
+    // 6 hard efforts total (down from 14) so there's plenty left for the wall.
     const PROTOCOL = [
       {
         id: 1,
         phase: "warmup",
-        name: "Easy Hangs — Half Crimp",
+        name: "Easy Pulls — Half Crimp",
         grip: "Half Crimp",
         holdLabel: "35mm",
         gripDesc: "Four fingers curled over the edge, middle joint bent ~90°. Thumb rests alongside index finger — don't wrap it over.",
         sets: 3,
         hangDuration: 7,
-        restBetweenSets: 60,
-        intensity: "40–50% effort",
-        note: "Light. Just get blood into fingers. No max recruitment yet.",
+        restBetweenSets: 45,
+        intensity: "30% → 50% effort",
+        note: "Build a little each set. Just getting blood into the fingers — nothing should feel like work yet.",
       },
       {
         id: 2,
-        phase: "working",
-        name: "Max Recruitment — Half Crimp",
-        grip: "Half Crimp",
+        phase: "tissue",
+        name: "Full Crimp Exposure",
+        grip: "Full Crimp",
         holdLabel: "20mm",
-        gripDesc: "Four fingers on the 20mm edge, middle joint bent ~90°. Pull DOWN hard into the hold — don't lift off. Shoulder blades slightly engaged.",
-        sets: 5,
-        hangDuration: 10,
-        restBetweenSets: 120,
-        intensity: "85–90% effort",
-        note: "Maximum intent throughout. Think 'rip the board off the wall.' If 20mm is too easy, drop to 18mm next session.",
+        gripDesc: "Fingers fully crimped — middle joint sharply bent, tip joint slightly hyperextended. Thumb OFF (no thumb lock). Ease into the load over 2–3 seconds, never yank.",
+        sets: 3,
+        hangDuration: 7,
+        restBetweenSets: 45,
+        intensity: "40–50% effort",
+        note: "This is NOT strength training — it's teaching your pulleys to tolerate the position so a surprise crimp on the wall isn't their first time. Stays light forever. Any sharp or localized pain at the base of a finger: stop.",
       },
       {
         id: 3,
         phase: "working",
-        name: "Max Recruitment — Open Hand",
-        grip: "Open Hand",
-        holdLabel: "25mm",
-        gripDesc: "Four fingers on the 25mm edge, but keep them STRAIGHTER than crimp — less bend at the middle knuckle, more like a gentle curl. No thumb. This is harder to feel at first, that's normal.",
-        sets: 5,
+        name: "Strength — Half Crimp",
+        grip: "Half Crimp",
+        holdLabel: "20mm",
+        gripDesc: "Four fingers on the 20mm edge, middle joint bent ~90°. Pull DOWN into the hold — don't lift off. Shoulder blades slightly engaged.",
+        sets: 3,
         hangDuration: 10,
         restBetweenSets: 120,
-        intensity: "85–90% effort",
-        note: "Open hand transfers better to outdoor holds. Use a bigger edge than crimp since it feels weaker — that's expected.",
+        intensity: "80–85% effort",
+        note: "Hard but controlled — you should feel like you could pull a bit harder. Ramp up over the first 2s, then hold steady. Save the last 15% for the wall.",
       },
       {
         id: 4,
         phase: "working",
-        name: "Three Finger Drag",
-        grip: "3-Finger Drag",
+        name: "Strength — Open Hand / Drag",
+        grip: "Open Hand",
         holdLabel: "25mm",
-        gripDesc: "Index, middle, and ring fingers only — pinky stays off the edge entirely. Fingers straight like open hand, no curl. It'll feel unstable at first; that instability is exactly what you're training.",
-        sets: 4,
+        gripDesc: "Four fingers on the 25mm edge, kept STRAIGHTER than half crimp — gentle curl, minimal bend at the middle knuckle. No thumb. Every other session you can swap to a 3-finger drag (pinky off).",
+        sets: 3,
         hangDuration: 10,
-        restBetweenSets: 90,
+        restBetweenSets: 120,
         intensity: "80–85% effort",
-        note: "Most underused grip in bouldering. Common on outdoor slopers and compression moves. Hard to recruit maximally until it's practiced — focus on consistent intent over raw force.",
+        note: "Lowest pulley load of any grip, so this is where you can push the hardest safely. Then go climb — this was your warm-up.",
       },
     ];
 
-    function formatTime(s) {
-      const m = Math.floor(s / 60);
-      const sec = s % 60;
-      return `${m}:${sec.toString().padStart(2, "0")}`;
+    const READY_SECONDS = 10;     // time to get on the edge after pressing start
+    const BETWEEN_EXERCISES = 90; // rest when switching grips
+    const COUNTDOWN_BEEPS = 3;    // beeps in the last N seconds before a hang
+
+    // Flatten the protocol into an ordered list of timed steps. Rest steps carry
+    // the exIdx/set of the hang that follows them, so previews come for free.
+    function buildSteps(protocol) {
+      const steps = [{ type: "ready", exIdx: 0, set: 1, duration: READY_SECONDS }];
+      protocol.forEach((ex, exIdx) => {
+        for (let set = 1; set <= ex.sets; set++) {
+          steps.push({ type: "hang", exIdx, set, duration: ex.hangDuration });
+          const lastSet = set === ex.sets;
+          if (lastSet && exIdx === protocol.length - 1) continue;
+          steps.push(lastSet
+            ? { type: "between", exIdx: exIdx + 1, set: 1, duration: BETWEEN_EXERCISES }
+            : { type: "rest", exIdx, set: set + 1, duration: ex.restBetweenSets });
+        }
+      });
+      return steps;
     }
 
-    function Arc({ value, max, size = 160, stroke = 10, color }) {
+    const STEPS = buildSteps(PROTOCOL);
+    const TOTAL_SECONDS = STEPS.reduce((sum, s) => sum + s.duration, 0);
+
+    const STEP_TEXT = {
+      ready:   { tag: "GET READY",     title: "Get On The Edge" },
+      rest:    { tag: "REST",          title: "Recover" },
+      between: { tag: "NEXT EXERCISE", title: "Change Grip" },
+    };
+
+    function formatTime(totalSeconds) {
+      const s = Math.max(0, Math.floor(totalSeconds));
+      return `${Math.floor(s / 60)}:${(s % 60).toString().padStart(2, "0")}`;
+    }
+
+    function Arc({ fraction, size = 160, stroke = 10, color }) {
       const r = (size - stroke) / 2;
       const circ = 2 * Math.PI * r;
-      const progress = 1 - (max > 0 ? value / max : 0);
+      const f = Math.min(1, Math.max(0, fraction));
       return (
         <svg width={size} height={size} style={{ transform: "rotate(-90deg)" }}>
           <circle cx={size/2} cy={size/2} r={r} fill="none" stroke="#1e1e1e" strokeWidth={stroke} />
@@ -105,178 +137,245 @@
             cx={size/2} cy={size/2} r={r}
             fill="none" stroke={color} strokeWidth={stroke}
             strokeDasharray={circ}
-            strokeDashoffset={circ * progress}
+            strokeDashoffset={circ * (1 - f)}
             strokeLinecap="round"
-            style={{ transition: "stroke-dashoffset 0.5s linear" }}
+            style={{ transition: "stroke-dashoffset 0.12s linear" }}
           />
         </svg>
       );
     }
 
-    function HangboardApp() {
-      const [screen, setScreen]           = useState("intro");
-      const [exIdx, setExIdx]             = useState(0);
-      const [setNum, setSetNum]           = useState(1);
-      const [phase, setPhase]             = useState("hang");
-      const [timeLeft, setTimeLeft]       = useState(null);
-      const [running, setRunning]         = useState(false);
-      const [totalElapsed, setTotalElapsed] = useState(0);
-      const [displayExIdx, setDisplayExIdx] = useState(0);
-      const [displaySetNum, setDisplaySetNum] = useState(1);
+    // Audio cues via Web Audio. The context must be created/resumed from a tap,
+    // otherwise iOS keeps it silent.
+    function useCues() {
+      const ctxRef = useRef(null);
+      const [muted, setMuted] = useState(false);
+      const mutedRef = useRef(false);
+      mutedRef.current = muted;
 
-      const intervalRef = useRef(null);
-      const stateRef    = useRef({ exIdx: 0, setNum: 1, phase: "hang", timeLeft: 0, running: false });
-      const advanceRef  = useRef(null);
+      const unlock = useCallback(() => {
+        try {
+          if (!ctxRef.current) ctxRef.current = new (window.AudioContext || window.webkitAudioContext)();
+          if (ctxRef.current.state === "suspended") ctxRef.current.resume();
+        } catch (e) {}
+      }, []);
 
-      const ex        = PROTOCOL[exIdx];
-      const displayEx = PROTOCOL[displayExIdx];
-
-      // Audio ding using Web Audio API
-      const audioCtxRef = useRef(null);
-      const ding = useCallback((type = 'rest') => {
-        if (!audioCtxRef.current) audioCtxRef.current = new (window.AudioContext || window.webkitAudioContext)();
-        const ctx = audioCtxRef.current;
-        // Two tones for end-of-hang, one lower tone for end-of-rest
-        const notes = type === 'hang' ? [880, 1100] : [550];
-        notes.forEach((freq, i) => {
-          const osc  = ctx.createOscillator();
+      const cue = useCallback((kind) => {
+        const patterns = {
+          tick: { notes: [660],        len: 0.12, vibrate: 40 },
+          go:   { notes: [990],        len: 0.45, vibrate: 200 },
+          stop: { notes: [880, 1100],  len: 0.35, vibrate: [80, 60, 80] },
+          done: { notes: [660, 880, 1100], len: 0.4, vibrate: [100, 60, 100, 60, 200] },
+        };
+        const p = patterns[kind];
+        if (!p || mutedRef.current) return;
+        try { navigator.vibrate && navigator.vibrate(p.vibrate); } catch (e) {}
+        const ctx = ctxRef.current;
+        if (!ctx) return;
+        if (ctx.state === "suspended") ctx.resume();
+        p.notes.forEach((freq, i) => {
+          const osc = ctx.createOscillator();
           const gain = ctx.createGain();
           osc.connect(gain); gain.connect(ctx.destination);
-          osc.type = 'sine';
+          osc.type = "sine";
           osc.frequency.value = freq;
           const t = ctx.currentTime + i * 0.18;
           gain.gain.setValueAtTime(0, t);
           gain.gain.linearRampToValueAtTime(0.35, t + 0.01);
-          gain.gain.exponentialRampToValueAtTime(0.0001, t + 0.4);
-          osc.start(t); osc.stop(t + 0.4);
+          gain.gain.exponentialRampToValueAtTime(0.0001, t + p.len);
+          osc.start(t); osc.stop(t + p.len);
         });
       }, []);
 
-      const startInterval = useCallback(() => {
-        clearInterval(intervalRef.current);
-        intervalRef.current = setInterval(() => {
-          const next = stateRef.current.timeLeft - 1;
-          stateRef.current.timeLeft = next;
-          setTimeLeft(next);
-          setTotalElapsed(e => e + 1);
-          if (next <= 0) {
-            clearInterval(intervalRef.current);
-            intervalRef.current = null;
-            advanceRef.current();
-          }
-        }, 1000);
-      }, []);
+      return { unlock, cue, muted, setMuted };
+    }
 
-      const advance = useCallback(() => {
-        const { exIdx, setNum, phase } = stateRef.current;
-        const ex = PROTOCOL[exIdx];
+    // Keep the screen on while a session is running; re-acquire after the tab
+    // comes back, since the browser drops the lock whenever the page is hidden.
+    function useWakeLock(active) {
+      useEffect(() => {
+        if (!active || !("wakeLock" in navigator)) return;
+        let lock = null;
+        let cancelled = false;
+        const acquire = async () => {
+          if (document.visibilityState !== "visible") return;
+          try {
+            const l = await navigator.wakeLock.request("screen");
+            if (cancelled) l.release(); else lock = l;
+          } catch (e) {}
+        };
+        acquire();
+        document.addEventListener("visibilitychange", acquire);
+        return () => {
+          cancelled = true;
+          document.removeEventListener("visibilitychange", acquire);
+          if (lock) lock.release();
+        };
+      }, [active]);
+    }
 
-        if (phase === "hang") {
-          ding('hang'); // double high ding — hang finished
-          if (setNum < ex.sets) {
-            const nextSetNum = setNum + 1;
-            stateRef.current = { ...stateRef.current, phase: "rest", timeLeft: ex.restBetweenSets, running: true, setNum: nextSetNum };
-            setPhase("rest");
-            setTimeLeft(ex.restBetweenSets);
-            setSetNum(nextSetNum);
-            setRunning(true);
-          } else if (exIdx + 1 < PROTOCOL.length) {
-            stateRef.current = { ...stateRef.current, phase: "between", timeLeft: 90, running: true, exIdx: exIdx + 1, setNum: 1 };
-            setPhase("between");
-            setTimeLeft(90);
-            setExIdx(exIdx + 1);
-            setSetNum(1);
-            setRunning(true);
-          } else {
-            stateRef.current.running = false;
-            setRunning(false);
-            setScreen("done");
-            return;
-          }
-        } else {
-          ding('rest'); // single low ding — rest over, hang starting
-          const nextEx = PROTOCOL[stateRef.current.exIdx];
-          stateRef.current = { ...stateRef.current, phase: "hang", timeLeft: nextEx.hangDuration, running: true };
-          setPhase("hang");
-          setTimeLeft(nextEx.hangDuration);
-          setRunning(true);
-          setDisplayExIdx(stateRef.current.exIdx);
-          setDisplaySetNum(stateRef.current.setNum);
+    function HangboardApp() {
+      const [screen, setScreen] = useState("intro");
+      const [, setFrame] = useState(0);
+      const rerender = useCallback(() => setFrame(f => f + 1), []);
+      const { unlock, cue, muted, setMuted } = useCues();
+
+      // All timing lives in this ref. Time is measured against a deadline on the
+      // monotonic clock, so it never drifts and keeps counting correctly when
+      // the browser throttles timers in a background tab.
+      const engine = useRef({ stepIdx: 0, deadline: 0, remainingMs: 0, running: false, elapsedMs: 0, lastTick: 0, lastBeep: null });
+
+      const transitionCue = useCallback((prev, next) => {
+        if (next.type === "hang") cue("go");
+        else if (prev.type === "hang") cue("stop");
+      }, [cue]);
+
+      const finish = useCallback(() => {
+        const e = engine.current;
+        e.running = false;
+        e.remainingMs = 0;
+        cue("done");
+        setScreen("done");
+      }, [cue]);
+
+      const tick = useCallback(() => {
+        const e = engine.current;
+        if (!e.running) return;
+        const now = performance.now();
+        e.elapsedMs += now - e.lastTick;
+        e.lastTick = now;
+
+        // Catch up through every step whose deadline has passed (more than one
+        // if the tab was asleep). Only cue transitions that are happening now.
+        while (now >= e.deadline) {
+          const late = now - e.deadline;
+          if (e.stepIdx >= STEPS.length - 1) { finish(); return; }
+          const prev = STEPS[e.stepIdx];
+          e.stepIdx += 1;
+          const next = STEPS[e.stepIdx];
+          e.deadline += next.duration * 1000;
+          if (late < 1000) transitionCue(prev, next);
         }
-        startInterval();
-      }, [startInterval, ding]);
+        e.remainingMs = e.deadline - now;
 
-      advanceRef.current = advance;
-      useEffect(() => { advanceRef.current = advance; }, [advance]);
+        const step = STEPS[e.stepIdx];
+        const sec = Math.ceil(e.remainingMs / 1000);
+        if (step.type !== "hang" && sec >= 1 && sec <= COUNTDOWN_BEEPS) {
+          const key = `${e.stepIdx}:${sec}`;
+          if (e.lastBeep !== key) { e.lastBeep = key; cue("tick"); }
+        }
+        rerender();
+      }, [cue, finish, rerender, transitionCue]);
 
       useEffect(() => {
-        if (running && !intervalRef.current) {
-          startInterval();
-        } else if (!running) {
-          clearInterval(intervalRef.current);
-          intervalRef.current = null;
-        }
-        return () => { clearInterval(intervalRef.current); intervalRef.current = null; };
-      }, [running, startInterval]);
+        if (screen !== "session") return;
+        const id = setInterval(tick, 100);
+        document.addEventListener("visibilitychange", tick);
+        return () => { clearInterval(id); document.removeEventListener("visibilitychange", tick); };
+      }, [screen, tick]);
+
+      useWakeLock(screen === "session" && engine.current.running);
+
+      // Move to a step with its full duration; keeps the current running/paused state.
+      const jumpTo = useCallback((idx) => {
+        const e = engine.current;
+        const now = performance.now();
+        const prev = STEPS[e.stepIdx];
+        e.stepIdx = idx;
+        e.remainingMs = STEPS[idx].duration * 1000;
+        e.deadline = now + e.remainingMs;
+        e.lastTick = now;
+        e.lastBeep = null;
+        if (e.running) transitionCue(prev, STEPS[idx]);
+        rerender();
+      }, [rerender, transitionCue]);
 
       const startSession = () => {
-        const first = PROTOCOL[0];
-        clearInterval(intervalRef.current);
-        intervalRef.current = null;
-        stateRef.current = { exIdx: 0, setNum: 1, phase: "hang", timeLeft: first.hangDuration, running: false };
+        unlock();
+        const now = performance.now();
+        engine.current = { stepIdx: 0, deadline: now + READY_SECONDS * 1000, remainingMs: READY_SECONDS * 1000, running: true, elapsedMs: 0, lastTick: now, lastBeep: null };
         setScreen("session");
-        setExIdx(0); setSetNum(1); setPhase("hang");
-        setTimeLeft(first.hangDuration); setTotalElapsed(0);
-        setDisplayExIdx(0); setDisplaySetNum(1);
-        setRunning(true);
       };
 
-      const toggle = () => {
-        const next = !stateRef.current.running;
-        stateRef.current.running = next;
-        setRunning(next);
+      const toggle = useCallback(() => {
+        unlock();
+        const e = engine.current;
+        const now = performance.now();
+        if (e.running) {
+          tick();
+          if (!e.running) return; // the tick just finished the session
+          e.remainingMs = Math.max(0, e.deadline - now);
+          e.running = false;
+        } else {
+          e.deadline = now + e.remainingMs;
+          e.lastTick = now;
+          e.running = true;
+        }
+        rerender();
+      }, [unlock, tick, rerender]);
+
+      const skip = useCallback(() => {
+        const e = engine.current;
+        if (e.stepIdx >= STEPS.length - 1) { finish(); return; }
+        jumpTo(e.stepIdx + 1);
+      }, [finish, jumpTo]);
+
+      // Restart the current step, or go to the previous one if it only just started.
+      const back = useCallback(() => {
+        const e = engine.current;
+        const spentMs = STEPS[e.stepIdx].duration * 1000 - e.remainingMs;
+        jumpTo(spentMs > 2000 || e.stepIdx === 0 ? e.stepIdx : e.stepIdx - 1);
+      }, [jumpTo]);
+
+      const endSession = () => {
+        if (!window.confirm("End this session?")) return;
+        engine.current.running = false;
+        setScreen("intro");
       };
 
-      const skip = () => {
-        clearInterval(intervalRef.current);
-        intervalRef.current = null;
-        advance();
-      };
-
-      // Keep screen awake while timer is running
-      const wakeLockRef = useRef(null);
       useEffect(() => {
-        const acquire = async () => {
-          if ('wakeLock' in navigator) {
-            try { wakeLockRef.current = await navigator.wakeLock.request('screen'); } catch(e) {}
-          }
+        if (screen !== "session") return;
+        const onKey = (ev) => {
+          if (ev.code === "Space") { ev.preventDefault(); toggle(); }
+          else if (ev.code === "ArrowRight") skip();
+          else if (ev.code === "ArrowLeft") back();
         };
-        const release = () => {
-          if (wakeLockRef.current) { wakeLockRef.current.release(); wakeLockRef.current = null; }
-        };
-        if (running && screen === 'session') { acquire(); } else { release(); }
-        return release;
-      }, [running, screen]);
+        window.addEventListener("keydown", onKey);
+        return () => window.removeEventListener("keydown", onKey);
+      }, [screen, toggle, skip, back]);
 
-      const isRest    = phase === "rest" || phase === "between";
-      const phaseData = PHASES[isRest ? "rest" : (ex?.phase || "working")];
-      const timerMax  = phase === "between" ? 90 : isRest ? (ex?.restBetweenSets || 120) : (ex?.hangDuration || 10);
-
-      // Next hang details to show during rest
-      const nextHangEx     = isRest ? PROTOCOL[exIdx] : null;
-      const nextHangSetNum = isRest ? setNum : null;
+      const e        = engine.current;
+      const step     = STEPS[e.stepIdx];
+      const ex       = PROTOCOL[step.exIdx];
+      const isHang   = step.type === "hang";
+      const color    = isHang ? PHASES[ex.phase].color : PHASES.rest.color;
+      const secsLeft = Math.max(0, Math.ceil(e.remainingMs / 1000));
+      const fraction = e.remainingMs / (step.duration * 1000);
+      const doneSets = step.set - 1;
+      const sessionProgress = (STEPS.slice(0, e.stepIdx).reduce((sum, s) => sum + s.duration, 0) + step.duration - e.remainingMs / 1000) / TOTAL_SECONDS;
 
       return (
         <div style={{ minHeight: "100vh", background: "#0a0a0a", color: "#f0f0f0", fontFamily: "'DM Mono', monospace", display: "flex", flexDirection: "column", alignItems: "center" }}>
 
           {/* Header */}
           <div style={{ width: "100%", maxWidth: 480, padding: "16px 20px 0" }}>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12 }}>
               <span style={{ fontFamily: "'Unbounded', sans-serif", fontSize: "0.75rem", color: "#666", letterSpacing: "0.15em" }}>NOHANG</span>
-              {screen === "session" && (
-                <span style={{ fontSize: "0.7rem", color: "#555" }}>ELAPSED {formatTime(totalElapsed)}</span>
-              )}
+              <div style={{ display: "flex", alignItems: "center", gap: 14, fontSize: "0.7rem", color: "#555" }}>
+                {screen === "session" && <span>ELAPSED {formatTime(e.elapsedMs / 1000)}</span>}
+                <button className="btn" onClick={() => setMuted(m => !m)} style={{ background: "none", color: "#555", padding: 0, fontSize: "0.7rem" }}>
+                  {muted ? "SOUND OFF" : "SOUND ON"}
+                </button>
+                {screen === "session" && (
+                  <button className="btn" onClick={endSession} style={{ background: "none", color: "#555", padding: 0, fontSize: "0.7rem" }}>END</button>
+                )}
+              </div>
             </div>
+            {screen === "session" && (
+              <div style={{ height: 2, background: "#1a1a1a", borderRadius: 1, marginTop: 12, overflow: "hidden" }}>
+                <div style={{ height: "100%", width: `${Math.min(100, sessionProgress * 100)}%`, background: "#333", transition: "width 0.12s linear" }} />
+              </div>
+            )}
           </div>
 
           {/* ── INTRO ── */}
@@ -286,7 +385,7 @@
                 No-Hang<br /><span style={{ color: "#fb923c" }}>Protocol</span>
               </div>
               <div style={{ color: "#888", fontSize: "0.78rem", marginBottom: 32, lineHeight: 1.7 }}>
-                Based on Emil Abrahamsson's isometric pulling method — max finger recruitment without full bodyweight load. Ideal for bouldering strength gains with lower injury risk.
+                Climbing-day version, based on Emil Abrahamsson's isometric pulling method. Do it as the last part of your warm-up, then go climb — so your rest days stay rest days. ~{Math.round(TOTAL_SECONDS / 60)} min.
               </div>
 
               <div style={{ marginBottom: 28 }}>
@@ -301,9 +400,19 @@
                 ))}
               </div>
 
-              <div style={{ background: "#111", border: "1px solid #222", borderRadius: 8, padding: "14px 16px", marginBottom: 28, fontSize: "0.72rem", color: "#888", lineHeight: 1.7 }}>
+              <div style={{ background: "#111", border: "1px solid #222", borderRadius: 8, padding: "14px 16px", marginBottom: 12, fontSize: "0.72rem", color: "#888", lineHeight: 1.7 }}>
                 <span style={{ color: "#fb923c" }}>HOW TO: </span>
-                Hang from the edge and pull DOWN into it with maximum intent — without pulling yourself off. Think "trying to rip the board off the wall." Engage your shoulder and core throughout.
+                Feet on the floor, pull DOWN into the edge to the target effort — ramp up over ~2s, never jerk. Engage your shoulder and core throughout.
+              </div>
+
+              <div style={{ background: "#111", border: "1px solid #222", borderRadius: 8, padding: "14px 16px", marginBottom: 12, fontSize: "0.72rem", color: "#888", lineHeight: 1.7 }}>
+                <span style={{ color: "#4ade80" }}>WHEN: </span>
+                On climbing days only, after 5–10 min of general warm-up (pulse raiser, easy arm circles, a few jugs). 2–3× per week = every climbing day, or skip it on the day you plan to go hardest. Never on rest days.
+              </div>
+
+              <div style={{ background: "#111", border: "1px solid #222", borderRadius: 8, padding: "14px 16px", marginBottom: 28, fontSize: "0.72rem", color: "#888", lineHeight: 1.7 }}>
+                <span style={{ color: "#facc15" }}>NEXT-MORNING CHECK: </span>
+                Fingers feel normal → keep going. Stiff or achy → drop to 2 sets per exercise next time. Still achy → skip the working sets for a week. Only add a 4th set after 3+ weeks of normal mornings.
               </div>
 
               <button className="btn" onClick={startSession} style={{ width: "100%", padding: "16px", background: "#fb923c", color: "#0a0a0a", fontSize: "0.9rem", fontWeight: 600, borderRadius: 6 }}>
@@ -313,94 +422,96 @@
           )}
 
           {/* ── SESSION ── */}
-          {screen === "session" && ex && (
-            <div className="fade-in" style={{ maxWidth: 480, width: "100%", padding: "24px 20px" }}>
+          {screen === "session" && (
+            <div style={{ maxWidth: 480, width: "100%", padding: "24px 20px" }}>
 
               {/* Phase tag */}
-              <div style={{ display: "inline-block", background: phaseData.color + "22", border: `1px solid ${phaseData.color}55`, color: phaseData.color, fontSize: "0.65rem", letterSpacing: "0.15em", padding: "4px 10px", borderRadius: 3, marginBottom: 20 }}>
-                {isRest ? "REST" : phaseData.label.toUpperCase()}
+              <div style={{ display: "inline-block", background: color + "22", border: `1px solid ${color}55`, color, fontSize: "0.65rem", letterSpacing: "0.15em", padding: "4px 10px", borderRadius: 3, marginBottom: 20 }}>
+                {isHang ? PHASES[ex.phase].label.toUpperCase() : STEP_TEXT[step.type].tag}
               </div>
 
               {/* Exercise name */}
-              <div style={{ fontFamily: "'Unbounded', sans-serif", fontSize: "1.2rem", lineHeight: 1.2, marginBottom: 6, color: isRest ? "#888" : "#f0f0f0" }}>
-                {phase === "between" ? "Next Exercise Soon" : isRest ? "Recover" : ex.name}
+              <div style={{ fontFamily: "'Unbounded', sans-serif", fontSize: "1.2rem", lineHeight: 1.2, marginBottom: 6, color: isHang ? "#f0f0f0" : "#888" }}>
+                {isHang ? ex.name : STEP_TEXT[step.type].title}
               </div>
 
-              {!isRest && (
+              {isHang && (
                 <>
                   <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 14, flexWrap: "wrap" }}>
-                    <div style={{ background: phaseData.color, color: "#0a0a0a", fontSize: "0.75rem", fontWeight: 700, padding: "3px 10px", borderRadius: 3, letterSpacing: "0.05em" }}>
+                    <div style={{ background: color, color: "#0a0a0a", fontSize: "0.75rem", fontWeight: 700, padding: "3px 10px", borderRadius: 3, letterSpacing: "0.05em" }}>
                       {ex.holdLabel} EDGE
                     </div>
                     <div style={{ fontSize: "0.7rem", color: "#555" }}>{ex.grip} · {ex.intensity}</div>
                   </div>
                   <div style={{ background: "#111", border: "1px solid #1e1e1e", borderRadius: 6, padding: "10px 14px", marginBottom: 4, fontSize: "0.72rem", color: "#777", lineHeight: 1.7 }}>
-                    <span style={{ color: phaseData.color, fontSize: "0.65rem", letterSpacing: "0.1em" }}>GRIP · </span>{ex.gripDesc}
+                    <span style={{ color, fontSize: "0.65rem", letterSpacing: "0.1em" }}>GRIP · </span>{ex.gripDesc}
                   </div>
                 </>
               )}
 
               {/* Timer ring */}
               <div style={{ display: "flex", flexDirection: "column", alignItems: "center", margin: "24px 0" }}>
-                <div style={{ position: "relative", width: 160, height: 160, display: "flex", alignItems: "center", justifyContent: "center" }}>
-                  <Arc value={timeLeft} max={timerMax} size={160} stroke={10} color={isRest ? "#60a5fa" : phaseData.color} />
+                <div onClick={toggle} style={{ position: "relative", width: 160, height: 160, display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer" }}>
+                  <Arc fraction={fraction} size={160} stroke={10} color={color} />
                   <div style={{ position: "absolute", textAlign: "center" }}>
-                    <div style={{ fontFamily: "'Unbounded', sans-serif", fontSize: "2.8rem", color: isRest ? "#60a5fa" : phaseData.color, lineHeight: 1 }}>{timeLeft}</div>
-                    <div style={{ fontSize: "0.65rem", color: "#555", letterSpacing: "0.1em", marginTop: 4 }}>SECONDS</div>
+                    <div style={{ fontFamily: "'Unbounded', sans-serif", fontSize: "2.8rem", color, lineHeight: 1, opacity: e.running ? 1 : 0.5 }}>{secsLeft}</div>
+                    <div style={{ fontSize: "0.65rem", color: e.running ? "#555" : color, letterSpacing: "0.1em", marginTop: 4 }}>{e.running ? "SECONDS" : "PAUSED"}</div>
                   </div>
                 </div>
 
                 {/* Set dots */}
                 <div style={{ marginTop: 16, display: "flex", gap: 6 }}>
-                  {Array.from({ length: displayEx.sets }).map((_, i) => {
-                    const completed = isRest ? i < displaySetNum : i < displaySetNum - 1;
-                    const active    = !isRest && i === displaySetNum - 1;
-                    return (
-                      <div key={i} style={{ width: 20, height: 4, borderRadius: 2, background: completed ? phaseData.color : active ? phaseData.color + "88" : "#222" }} />
-                    );
-                  })}
+                  {Array.from({ length: ex.sets }).map((_, i) => (
+                    <div key={i} style={{ width: 20, height: 4, borderRadius: 2, background: i < doneSets ? PHASES[ex.phase].color : (isHang && i === doneSets) ? PHASES[ex.phase].color + "88" : "#222" }} />
+                  ))}
                 </div>
                 <div style={{ fontSize: "0.68rem", color: "#555", marginTop: 8, letterSpacing: "0.1em" }}>
-                  SET {displaySetNum} / {displayEx.sets}
+                  EXERCISE {step.exIdx + 1} / {PROTOCOL.length} · SET {step.set} / {ex.sets}
                 </div>
               </div>
 
               {/* Cue (hang only) */}
-              {!isRest && (
-                <div style={{ background: "#111", border: `1px solid ${phaseData.color}22`, borderRadius: 6, padding: "12px 14px", marginBottom: 24, fontSize: "0.72rem", color: "#aaa", lineHeight: 1.6 }}>
+              {isHang && (
+                <div style={{ background: "#111", border: `1px solid ${color}22`, borderRadius: 6, padding: "12px 14px", marginBottom: 24, fontSize: "0.72rem", color: "#aaa", lineHeight: 1.6 }}>
                   {ex.note}
                 </div>
               )}
 
-              {/* Next hang preview (rest only) */}
-              {isRest && nextHangEx && (
+              {/* Next hang preview (rest / ready / between) */}
+              {!isHang && (
                 <div style={{ background: "#111", border: "1px solid #1e2a1e", borderRadius: 8, padding: "14px 16px", marginBottom: 24 }}>
                   <div style={{ fontSize: "0.6rem", color: "#444", letterSpacing: "0.15em", marginBottom: 10 }}>
-                    {phase === "between" ? "NEXT EXERCISE" : "NEXT HANG"}
+                    {step.type === "rest" ? "NEXT HANG" : "NEXT EXERCISE"}
                   </div>
-                  <div style={{ fontSize: "0.88rem", fontWeight: 500, color: "#e0e0e0", marginBottom: 8 }}>{nextHangEx.name}</div>
+                  <div style={{ fontSize: "0.88rem", fontWeight: 500, color: "#e0e0e0", marginBottom: 8 }}>{ex.name}</div>
                   <div style={{ display: "flex", gap: 8, marginBottom: 10, flexWrap: "wrap" }}>
-                    <div style={{ background: PHASES[nextHangEx.phase].color, color: "#0a0a0a", fontSize: "0.7rem", fontWeight: 700, padding: "2px 8px", borderRadius: 3 }}>
-                      {nextHangEx.holdLabel} EDGE
+                    <div style={{ background: PHASES[ex.phase].color, color: "#0a0a0a", fontSize: "0.7rem", fontWeight: 700, padding: "2px 8px", borderRadius: 3 }}>
+                      {ex.holdLabel} EDGE
                     </div>
                     <div style={{ fontSize: "0.7rem", color: "#555" }}>
-                      {phase === "between" ? `Set 1 / ${nextHangEx.sets}` : `Set ${nextHangSetNum} / ${nextHangEx.sets}`} · {nextHangEx.intensity}
+                      Set {step.set} / {ex.sets} · {ex.hangDuration}s · {ex.intensity}
                     </div>
                   </div>
                   <div style={{ fontSize: "0.7rem", color: "#555", lineHeight: 1.6 }}>
-                    <span style={{ color: PHASES[nextHangEx.phase].color, fontSize: "0.62rem", letterSpacing: "0.08em" }}>GRIP · </span>{nextHangEx.gripDesc}
+                    <span style={{ color: PHASES[ex.phase].color, fontSize: "0.62rem", letterSpacing: "0.08em" }}>GRIP · </span>{ex.gripDesc}
                   </div>
                 </div>
               )}
 
               {/* Controls */}
               <div style={{ display: "flex", gap: 10 }}>
-                <button className="btn" onClick={toggle} style={{ flex: 2, padding: "14px", background: running ? "#1e1e1e" : phaseData.color, color: running ? phaseData.color : "#0a0a0a", border: `1px solid ${phaseData.color}55` }}>
-                  {running ? "⏸ PAUSE" : "▶ RESUME"}
+                <button className="btn" onClick={back} style={{ flex: 1, padding: "14px", background: "#111", color: "#555", border: "1px solid #222" }}>
+                  ← BACK
+                </button>
+                <button className="btn" onClick={toggle} style={{ flex: 2, padding: "14px", background: e.running ? "#1e1e1e" : color, color: e.running ? color : "#0a0a0a", border: `1px solid ${color}55` }}>
+                  {e.running ? "⏸ PAUSE" : "▶ RESUME"}
                 </button>
                 <button className="btn" onClick={skip} style={{ flex: 1, padding: "14px", background: "#111", color: "#555", border: "1px solid #222" }}>
                   SKIP →
                 </button>
+              </div>
+              <div style={{ fontSize: "0.62rem", color: "#333", textAlign: "center", marginTop: 14, lineHeight: 1.6 }}>
+                Beeps count down the last {COUNTDOWN_BEEPS}s before each hang. Tap the timer to pause.
               </div>
             </div>
           )}
@@ -410,12 +521,12 @@
             <div className="fade-in" style={{ maxWidth: 480, width: "100%", padding: "60px 20px", textAlign: "center" }}>
               <div style={{ fontSize: "3rem", marginBottom: 16 }}>🧗</div>
               <div style={{ fontFamily: "'Unbounded', sans-serif", fontSize: "1.8rem", color: "#e879f9", marginBottom: 12 }}>Session Done</div>
-              <div style={{ color: "#666", fontSize: "0.78rem", marginBottom: 8 }}>Total time: {formatTime(totalElapsed)}</div>
+              <div style={{ color: "#666", fontSize: "0.78rem", marginBottom: 8 }}>Total time: {formatTime(e.elapsedMs / 1000)}</div>
               <div style={{ color: "#555", fontSize: "0.72rem", lineHeight: 1.8, margin: "16px auto 40px", maxWidth: 300 }}>
-                Give your fingers 48–72h before another finger-intensive session. Log it and get some protein in.
+                That's your warm-up done — go climb. Do the next-morning check tomorrow and adjust next session's sets if your fingers feel off.
               </div>
-              <button className="btn" onClick={() => { setScreen("intro"); setExIdx(0); setSetNum(1); setPhase("hang"); setTimeLeft(null); setRunning(false); }} style={{ padding: "14px 32px", background: "#e879f9", color: "#0a0a0a", borderRadius: 6 }}>
-                DO IT AGAIN
+              <button className="btn" onClick={() => setScreen("intro")} style={{ padding: "14px 32px", background: "#e879f9", color: "#0a0a0a", borderRadius: 6 }}>
+                BACK TO START
               </button>
             </div>
           )}
